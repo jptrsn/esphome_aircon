@@ -1,0 +1,163 @@
+script:
+  - id: compressor_on
+    then:
+      - script.execute: fan_on
+      - output.turn_on: compressor_output
+      - lambda: |-
+          id(compressor_state).publish_state(true);
+          id(compressorSafeToTurnOff).publish_state(false);
+          id(opState) = 2;
+      - delay: ${COMPRESSOR_TIMEOUT}
+      - lambda: 'id(compressorSafeToTurnOff).publish_state(true);'
+
+  - id: compressor_off
+    then:
+        - lambda: 'id(compressor_state).publish_state(false);'
+        - wait_until:
+            binary_sensor.is_on: compressorSafeToTurnOff
+        - if:
+            condition:
+              lambda: 'return id(compressor_state).state == false;'
+            then:
+              - logger.log: "Turning off compressor"
+              - output.turn_off: compressor_output
+              - lambda: 'id(opState) = 3;'
+              - if:
+                  condition:
+                    lambda: 'return id(opMode) != 3;'
+                  then:
+                    - script.execute: fan_timeout
+                    - script.execute: fan_off
+
+  - id: fan_timeout
+    then:
+      - lambda: 'id(fanSafeToTurnOff).publish_state(false);'
+      - delay: ${FAN_TIMEOUT}
+      - lambda: 'id(fanSafeToTurnOff).publish_state(true);'
+
+  - id: fan_on
+    then:
+      - output.turn_on: fan_output
+      - lambda: |-
+          id(fan_state).publish_state(true);
+          if (id(compressor_output) == false) {
+            id(opState) = 3;
+          }
+
+  - id: fan_off
+    then:
+      - logger.log: "Turn off fan"
+      - lambda: 'id(fan_state).publish_state(false);'
+      - wait_until:
+          binary_sensor.is_on: fanSafeToTurnOff
+      - if:
+          condition:
+            lambda: 'return id(fan_state).state == false;'
+          then:
+            - output.turn_off: fan_output
+            - lambda: |-
+                if (id(opMode) == 1) {
+                  id(opState) = 1;
+                } else {
+                  id(opState) = 0;
+                }
+
+  - id: toggle_fan_speed
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(fan_speed_output);'
+          then:
+            - output.turn_on: fan_speed_output
+          else:
+            - output.turn_off: fan_speed_output
+      - switch.template.publish:
+          id: fan_speed
+          state: !lambda 'return id(fan_speed_output);'
+
+  - id: assesOutputStates
+    then:
+      - logger.log: 'Assess Output States'
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 0;' # off
+          then:
+            - logger.log: 'calling compressor_off'
+            - script.execute: compressor_off
+            - lambda: |-
+                id(opState) = 0;
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 1;' # auto
+          then:
+            - logger.log: 'opMode auto'
+            - script.execute: evaluate_auto_state
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 2;' # cool
+          then:
+            - logger.log: 'opMode cool'
+            - script.execute: compressor_on
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 3;' # fan_only
+          then:
+            - logger.log: 'opMode fan_only'
+            - if:
+                condition:
+                  - lambda: 'return id(compressor_state).state == true;'
+                then:
+                  - script.execute: compressor_off
+                  - script.execute: fan_on
+                else:
+                  - script.execute: fan_on
+
+  - id: evaluate_auto_state
+    then:
+      - logger.log: 'evaluating state for auto op mode'
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 1;'
+          then:
+            - logger.log: 'in auto mode'
+            - if:
+                condition:
+                  - lambda: 'return (id(currentTemp) < (id(targetTemp) - ${HYSTERESIS}) && id(compressor_state).state == false && id(fan_state).state == true);'
+                then:
+                  - logger.log: 'turning off fan'
+                  - lambda: 'id(fanSafeToTurnOff).publish_state(true);'
+                  - output.turn_off: fan_output
+                else:
+                  - logger.log: 'fan is off, or compressor is on'
+            - logger.log: 'end if block'
+            - if:
+                condition:
+                  - lambda: 'return (id(currentTemp) < (id(targetTemp) - ${HYSTERESIS}) && id(compressor_state).state == true);'
+                then:
+                  - logger.log: 'turning off compressor'
+            #       - script.execute: compressor_off
+            # - if:
+            #     condition:
+            #       - lambda: 'return (id(currentTemp) < (id(targetTemp) - ${HYSTERESIS}) && id(compressor_state).state == false && id(fan_state).state == false);'
+            #     then:
+            #       - logger.log: 'already idle'
+            #       - lambda: 'id(opState) = 1;'
+            # - if:
+            #     condition:
+            #       - lambda: 'return id(currentTemp) > (id(targetTemp) + ${HYSTERESIS});'
+            #     then:
+            #       - logger.log: 'above target temp by hysteresis level'
+            #       - script.execute: compressor_on
+          else:
+            - logger.log: 'not in auto mode'
+
+
+  - id: evaluate_change
+    then:
+      - logger.log: 'evaluate change'
+      - if:
+          condition:
+            - lambda: 'return id(opMode) == 1;' # auto
+          then:
+            - logger.log: 'auto mode - evaluating auto_state'
+            - script.execute: evaluate_auto_state
