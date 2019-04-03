@@ -21,13 +21,14 @@ substitutions:
   FAN_TIMEOUT: 15s # 2min                           # Minimum run time for the fan after the compressor has been shut off. Ensures that compressor is cooled before left idle. 2min is recommended
   FAN_ENABLE: D5                                    # GPIO that controls the fan on/off
   FAN_SPEED: D7                                     # GPIO that controls fan speed (e.g. ON = high, OFF = low)
+  IR_RECEIVER: D8
   WS_PIN: D3                                        # GPIO to control WS2812B LEDs. Ensure that logic level output from your board meets the spec for these chips' input.
   SDA: D1                                           # i2c data GPIO
   SCL: D2                                           # i2c clock GPIO
   RESET: D0                                         # GPIO for resetting the oled display. Not required
   TEMP_INPUT: input_number.airconditioner1_temp     # Input number entity ID for controlling target temperature
   MODE_INPUT: input_select.ac1_mode                 # Input select entity ID for controlling operation mode
-  HYSTERESIS: "1"                                   # Defines the number of degrees celsius on either side of the target temperature that is deemed "acceptable". Recommended to be greater than zero
+  HYSTERESIS: "2"                                   # Defines the number of degrees celsius on either side of the target temperature that is deemed "acceptable". Recommended to be greater than zero
 
 # ESP Home configuration
 esphome:
@@ -36,10 +37,8 @@ esphome:
   board: d1_mini
   on_boot:
     then:
-      - output.turn_off: compressor_output
-      - output.turn_off: fan_output
-      - output.turn_off: fan_speed_output
-      - display.page.show: ac_idle
+      - switch.turn_off: compressor_output
+      - switch.turn_off: fan_output
 
 # Network credentials. Use a secret.yaml file to split off your critical information
 wifi:
@@ -54,7 +53,6 @@ api:
 
 ota:
 
-# MQTT is available, but cannot be used at the same time as the native ESPHome api. Enabling both will result in device reboots
 # mqtt:
 #   broker: !secret mqtt-ip
 #   username: !secret mqtt-user
@@ -62,41 +60,14 @@ ota:
 #   discovery: true
 #   id: mqtt_client
 
+i2c:
+  sda: ${SDA}
+  scl: ${SCL}
+  scan: False
+
 status_led:
   pin:
     number: ${STATUS_PIN}
-    inverted: true
-
-time:
-  - platform: homeassistant
-    id: time
-
-binary_sensor:
-  - platform: status
-    name: "${DEVICE_ID} Status"
-
-  - platform: template
-    id: compressorSafeToTurnOff
-    internal: true
-
-  - platform: template
-    id: fanSafeToTurnOff
-    internal: true
-
-output:
-  - platform: gpio
-    id: compressor_output
-    pin: ${COMPRESSOR_OUTPUT}
-    inverted: true
-
-  - platform: gpio
-    id: fan_output
-    pin: ${FAN_ENABLE}
-    inverted: true
-
-  - platform: gpio
-    id: fan_speed_output
-    pin: ${FAN_SPEED}
     inverted: true
 
 globals:
@@ -119,24 +90,34 @@ globals:
     restore_value: no
     initial_value: '21'
 
-  - id: currentTemp
-    type: byte
-    restore_value: no
+switch:
+  - platform: gpio
+    id: compressor_output
+    internal: true
+    pin:
+      number: ${COMPRESSOR_OUTPUT}
+      inverted: yes
+
+  - platform: gpio
+    id: fan_output
+    internal: true
+    pin:
+      number: ${FAN_ENABLE}
+      inverted: yes
+
+time:
+  - platform: homeassistant
+    id: time
+
+binary_sensor:
+  - platform: status
+    name: "${DEVICE_ID} Status"
 
 <<: !include scripts.yaml
 
-sensor:
-  # Home assistant input select element that is used to set the operation mode from the web.
-  # Can also be modified by use of the rotary encoder, and will update to reflect the currenly set operation mode
-  - platform: homeassistant
-    id: setTemp
-    entity_id: ${TEMP_INPUT}
-    on_value:
-      - then:
-          - lambda: |-
-              id(targetTemp) = (int)(id(setTemp).state);
-          - script.execute: evaluate_change
+<<: !include light.yaml
 
+sensor:
   # HTU21D used to determine ambient temperature. Can be replaced by any other temperature sensor (provided the logic remains the same)
   # Should be placed in front of the air intake for the AC unit.
   - platform: htu21d
@@ -144,10 +125,8 @@ sensor:
       name: "${DEVICE_ID} Temp"
       id: temp
       on_value:
-        - then:
-            - lambda: |-
-                id(currentTemp) = id(temp).state;
-            - script.execute: evaluate_change
+        - script.execute: on_temp_value
+
     humidity:
       name: "${DEVICE_ID} Humidity"
       id: hum
@@ -160,79 +139,46 @@ sensor:
     address: 0x23
     update_interval: 60s
 
+  # Home assistant input select element that is used to set the operation mode from the web.
+  # Can also be modified by use of the rotary encoder, and will update to reflect the currenly set operation mode
+  - platform: homeassistant
+    id: setTemp
+    entity_id: ${TEMP_INPUT}
+    on_value:
+      - then:
+          - script.execute: on_temp_value
+
 text_sensor:
 
   - id: setMode
     name: "${DEVICE_ID} Mode"
     platform: homeassistant
     entity_id: ${MODE_INPUT}
+    internal: true
     on_value:
       - then:
-          - lambda: |-
-              if (id(setMode).state == "off") {
-                id(opMode) = 0;
-                id(opState) = 0;
-              } else if (id(setMode).state == "auto") {
-                id(opMode) = 1;
-              } else if (id(setMode).state == "cool") {
-                id(opMode) = 2;
-                id(opState) = 2;
-              } else if (id(setMode).state == "fan_only") {
-                id(opMode) = 3;
-                id(opState) = 3;
-              }
-          - script.execute: assesOutputStates
+          - script.execute: on_mode_value
 
-  - id: operationMode
+  - id: opStateText
     platform: template
-    name: "Operation State"
+    name: "${DEVICE_ID} Operation State"
+    update_interval: 15s
     lambda: |-
       if (id(opState) == 0) {
         return {"Off"};
       } else if (id(opState) == 1) {
         return {"Idle"};
       } else if (id(opState) == 2) {
-        return {"Cooling"};
+        return {"Cool"};
       } else if (id(opState) == 3) {
         return {"Fan"};
       } else {
         return {"Unknown"};
       }
 
-
-light:
-  - platform: fastled_clockless
-    chipset: WS2812B
-    pin: ${WS_PIN}
-    num_leds: 8
-    rgb_order: GRB
-    name: "${DEVICE_ID} Light"
-
-switch:
-  - platform: template
-    name: "${DEVICE_ID} Compressor"
-    id: compressor_state
-    icon: "mdi:snowflake"
-    turn_on_action:
-      - script.execute: compressor_on
-    turn_off_action:
-      - script.execute: compressor_off
-
-  - platform: template
-    name: "${DEVICE_ID} Fan State"
-    id: fan_state
-    icon: "mdi:fan"
-    turn_on_action:
-      - script.execute: fan_on
-    turn_off_action:
-      - script.execute: fan_off
-
-  - platform: template
-    name: "${DEVICE_ID} Fan Speed"
-    id: fan_speed
-    turn_on_action:
-      - script.execute: toggle_fan_speed
-
+remote_receiver:
+  pin: ${IR_RECEIVER}
+  dump: all
 
 font:
 - file: 'slkscr.ttf'
@@ -250,19 +196,12 @@ font:
   glyphs: "0123456789°%."
 
 image:
-  - file: "fan-large.png"
-    id: fanHighIcon
   - file: "fan_outline-large.png"
-    id: fanLowIcon
+    id: fanIcon
   - file: "snowflake-large.png"
     id: coolIcon
   - file: "clock-outline.png"
     id: idleIcon
-
-i2c:
-  sda: ${SDA}
-  scl: ${SCL}
-  scan: False
 
 display:
   - platform: ssd1306_i2c
@@ -270,38 +209,38 @@ display:
     reset_pin: ${RESET}
     address: 0x3C
     id: oled
-    pages:
-      - id: ac_idle
-        lambda: |-
+    lambda: |-
 
-          it.printf(64, 0, id(font1), TextAlign::TOP_CENTER, "Air Conditioner");
+      it.printf(64, 0, id(font1), TextAlign::TOP_CENTER, "Air Conditioner");
 
-          // Print time in HH:MM format
-          it.strftime(42, 0, id(font2), TextAlign::TOP_CENTER, "%H:%M", id(time).now());
+      // Print time in HH:MM format
+      it.strftime(42, 0, id(font2), TextAlign::TOP_CENTER, "%H:%M", id(time).now());
 
-          // Print temperature
-          if (id(temp).has_state()) {
-            it.printf(3, 52, id(font3), TextAlign::TOP_LEFT , "%.1f°", id(temp).state);
-          }
+      // Print temperature
+      if (id(temp).has_state()) {
+        it.printf(3, 52, id(font3), TextAlign::TOP_LEFT , "%.1f°", id(temp).state);
+      }
 
-          // Print humidity
-          if (id(hum).has_state()) {
-            it.printf(42, 52, id(font3), TextAlign::TOP_CENTER , "%.0f%%", id(hum).state);
-          }
+      // Print humidity
+      if (id(hum).has_state()) {
+        it.printf(42, 52, id(font3), TextAlign::TOP_CENTER , "%.0f%%", id(hum).state);
+      }
 
-          // Print lux
-          if (id(lux).has_state()) {
-            it.printf(76, 52, id(font3), TextAlign::TOP_RIGHT , "%.0f", id(lux).state);
-          }
+      // Print lux
+      if (id(lux).has_state()) {
+        it.printf(80, 52, id(font3), TextAlign::TOP_RIGHT , "%.0f", id(lux).state);
+      }
 
-          // Print mode
-          it.printf(102, 54, id(font1), TextAlign::TOP_CENTER , "%s", id(setMode).state.c_str());
+      // Print mode
+      if (id(setMode).has_state()) {
+        it.printf(102, 54, id(font1), TextAlign::TOP_CENTER , "%s", id(opStateText).state.c_str());
+      }
 
-          // Display state icon
-          if (id(opState) == 1) {
-            it.image(86, 12, id(idleIcon));
-          } else if (id(opState) == 2) {
-            it.image(86, 12, id(coolIcon));
-          } else if (id(opState) == 3) {
-            it.image(86, 12, id(fanHighIcon));
-          }
+      // Display state icon
+      if (id(opState) == 1) {
+        it.image(86, 12, id(idleIcon));
+      } else if (id(opState) == 2) {
+        it.image(86, 12, id(coolIcon));
+      } else if (id(opState) == 3) {
+        it.image(86, 12, id(fanIcon));
+      }

@@ -1,0 +1,15 @@
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: ${WS_PIN}
+    num_leds: 8
+    rgb_order: GRB
+    name: "${DEVICE_ID} Light"
+    # effects:
+    #   - addressable_lambda:
+    #       name: "Animate Cool"
+    #       update_interval: 250ms
+    #       lambda: |-
+    #         for (int i = 1; i < it.size(); i++) {
+    #
+    #         }
