@@ -4,7 +4,7 @@
 # ESPHome developed by Otto Winter (@OttoWinter_)
 # https://esphome.io
 #
-# Developed by James Petersen (@Edu_Coder) *** This file only ***
+# *** This file only *** scripted by James Petersen (@Edu_Coder)
 #
 # Released under a Creative Commons Attribution-ShareAlike 2.5 Canada (CC BY-SA 2.5 CA)
 # https://creativecommons.org/licenses/by-sa/2.5/ca/
@@ -20,16 +20,14 @@ substitutions:
   COMPRESSOR_TIMEOUT: 15s #2min                     # Minimum run time for the compressor. Ensures that it will not power cycle too rapidly. 2min is recommended
   FAN_TIMEOUT: 15s # 2min                           # Minimum run time for the fan after the compressor has been shut off. Ensures that compressor is cooled before left idle. 2min is recommended
   FAN_ENABLE: D5                                    # GPIO that controls the fan on/off
-  FAN_SPEED: D7                                     # GPIO that controls fan speed (e.g. ON = high, OFF = low)
-  IR_RECEIVER: D8
+  IR_RECEIVER: D7
   WS_PIN: D3                                        # GPIO to control WS2812B LEDs. Ensure that logic level output from your board meets the spec for these chips' input.
   SDA: D1                                           # i2c data GPIO
   SCL: D2                                           # i2c clock GPIO
-  RESET: D0                                         # GPIO for resetting the oled display. Not required
   TEMP_INPUT: input_number.airconditioner1_temp     # Input number entity ID for controlling target temperature
   MODE_INPUT: input_select.ac1_mode                 # Input select entity ID for controlling operation mode
   HYSTERESIS: "2"                                   # Defines the number of degrees celsius on either side of the target temperature that is deemed "acceptable". Recommended to be greater than zero
-
+  
 # ESP Home configuration
 esphome:
   name: airconditioner1
@@ -96,22 +94,20 @@ switch:
     internal: true
     pin:
       number: ${COMPRESSOR_OUTPUT}
-      inverted: yes
+      inverted: true
 
   - platform: gpio
     id: fan_output
     internal: true
     pin:
       number: ${FAN_ENABLE}
-      inverted: yes
+      inverted: true
 
 time:
   - platform: homeassistant
     id: time
 
-binary_sensor:
-  - platform: status
-    name: "${DEVICE_ID} Status"
+<<: !include binary_sensor.yaml
 
 <<: !include scripts.yaml
 
@@ -177,8 +173,15 @@ text_sensor:
       }
 
 remote_receiver:
-  pin: ${IR_RECEIVER}
-  dump: all
+  pin:
+    number: ${IR_RECEIVER}
+    inverted: true
+  # tolerance: 5%
+  filter: 100us
+  # buffer_size: 5kb
+  dump:
+    - sony
+    - nec
 
 font:
 - file: 'slkscr.ttf'
@@ -188,12 +191,12 @@ font:
 - file: 'bebas.ttf'
   id: font2
   size: 36
-  glyphs: "0123456789: "
+  glyphs: "-0123456789: "
 
 - file: 'arial_narrow_7.ttf'
   id: font3
   size: 12
-  glyphs: "0123456789°%."
+  glyphs: "-0123456789°%."
 
 image:
   - file: "fan_outline-large.png"
@@ -206,7 +209,6 @@ image:
 display:
   - platform: ssd1306_i2c
     model: "SH1106 128x64"
-    reset_pin: ${RESET}
     address: 0x3C
     id: oled
     lambda: |-

@@ -1,0 +1,52 @@
+binary_sensor:
+  - platform: status
+    name: "${DEVICE_ID} Status"
+
+  - platform: remote_receiver
+    name: 'Sony Power'
+    sony:
+      data: 0x00005422
+      nbits: 15
+    internal: true
+    filters:
+      - delayed_off: 250ms
+    # on_click:
+    #   then:
+    #     - logger.log: 'power button pressed'
+
+
+  - platform: remote_receiver
+    name: 'Sony Mode'
+    sony:
+      data: 0x00004422
+      nbits: 15
+    internal: true
+    filters:
+      - delayed_off: 250ms
+    # on_press:
+    #   then:
+    #     - logger.log: 'mode button pressed'
+
+  - platform: remote_receiver
+    name: 'Sony +'
+    sony:
+      data: 0x00002422
+      nbits: 15
+    internal: true
+    filters:
+      - delayed_off: 250ms
+    # on_press:
+    #   then:
+    #     - logger.log: '+ button pressed'
+
+  - platform: remote_receiver
+    name: 'Sony -'
+    sony:
+      data: 0x00006422
+      nbits: 15
+    internal: true
+    filters:
+      - delayed_off: 250ms
+    # on_press:
+    #   then:
+    #     - logger.log: '- button pressed'

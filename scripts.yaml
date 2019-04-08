@@ -87,7 +87,6 @@ script:
             - logger.log: 'compressor is on, turning off'
             - script.execute: compressor_off
 
-
   - id: on_temp_value
     then:
       - lambda: |-
@@ -171,3 +170,7 @@ script:
             lambda: 'return id(opMode) == 3;'
           then:
             - script.execute: mode_fan
+
+  - id: remote_mode_change
+    then:
+      - logger.log: 'remote mode change'
