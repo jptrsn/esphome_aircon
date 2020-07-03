@@ -12,235 +12,252 @@
 # Attribution — You must give appropriate credit, provide a link to the license, and indicate if changes were made.
 # ShareAlike — If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original.
 
-# Modify these values to customize your instance
 substitutions:
-  DEVICE_ID: airconditioner1                        # Device ID to show in Home Assistant. Access from the integrations tab, by adding ${DEVICE_ID}.local
-  STATUS_PIN: D4                                    # On-board LED pin, to indicate status. D4 on a Wemos D1 mini
-  COMPRESSOR_OUTPUT: D6                             # GPIO that controls the compressor relay
-  COMPRESSOR_TIMEOUT: 15s #2min                     # Minimum run time for the compressor. Ensures that it will not power cycle too rapidly. 2min is recommended
-  FAN_TIMEOUT: 15s # 2min                           # Minimum run time for the fan after the compressor has been shut off. Ensures that compressor is cooled before left idle. 2min is recommended
-  FAN_ENABLE: D5                                    # GPIO that controls the fan on/off
-  FAN_SPEED: D7                                     # GPIO that controls fan speed (e.g. ON = high, OFF = low)
-  IR_RECEIVER: D8
-  WS_PIN: D3                                        # GPIO to control WS2812B LEDs. Ensure that logic level output from your board meets the spec for these chips' input.
-  SDA: D1                                           # i2c data GPIO
-  SCL: D2                                           # i2c clock GPIO
-  RESET: D0                                         # GPIO for resetting the oled display. Not required
-  TEMP_INPUT: input_number.airconditioner1_temp     # Input number entity ID for controlling target temperature
-  MODE_INPUT: input_select.ac1_mode                 # Input select entity ID for controlling operation mode
-  HYSTERESIS: "2"                                   # Defines the number of degrees celsius on either side of the target temperature that is deemed "acceptable". Recommended to be greater than zero
+  # Device ID to show in Home Assistant. Access from the integrations tab, by adding ${DEVICE_ID}.local
+  DEVICE_ID: ac_01
+  # The human-friendly device name
+  DEVICE_NAME: AC 01
+  # Default target temperature in degrees C
+  TARGET_TEMP: '25'
+  # On-board LED pin, to indicate status. D4 on a Wemos D1 mini
+  STATUS_PIN: D4
+  # GPIO that controls the compressor relay
+  COMPRESSOR_OUTPUT: D6
+  # GPIO that controls the fan on/off
+  FAN_OUTPUT: D7
+  # i2c databus GPIO
+  SDA: D2
+  SCL: D1
 
-# ESP Home configuration
 esphome:
-  name: airconditioner1
+  name: ${DEVICE_ID}
   platform: ESP8266
   board: d1_mini
-  on_boot:
-    then:
-      - switch.turn_off: compressor_output
-      - switch.turn_off: fan_output
 
-# Network credentials. Use a secret.yaml file to split off your critical information
 wifi:
   ssid: !secret ssid
   password: !secret wifi_password
 
-# Enable logging
-logger:
+  ap:
+    ssid: ${DEVICE_ID}
 
-# Enable Home Assistant API
+captive_portal:
+
+# Enable logging.
+logger:
+  level: debug
+
+# Enable Home Assistant API.
 api:
 
+# Enable over-the-air updates.
 ota:
 
-# mqtt:
-#   broker: !secret mqtt-ip
-#   username: !secret mqtt-user
-#   password: !secret mqtt-pass
-#   discovery: true
-#   id: mqtt_client
+# Enable Web server.
+web_server:
+  port: 80
 
+# Enable the i2c bus
 i2c:
   sda: ${SDA}
   scl: ${SCL}
   scan: False
 
-status_led:
-  pin:
-    number: ${STATUS_PIN}
-    inverted: true
-
-globals:
-  # Current operating mode,
-  # 0 (off), 1 (auto), 2 (cool), 3 (fan_only)
-  - id: opMode
-    type: byte
-    restore_value: no
-    initial_value: '0'
-
-  # Current operating state. Different from above (e.g. can be cooling or idle when set to auto)
-  # 0 (off), 1 (idle), 2 (cooling), 3 (fan)
-  - id: opState
-    type: byte
-    restore_value: no
-    initial_value: '0'
-
-  - id: targetTemp # target temperature
-    type: byte
-    restore_value: no
-    initial_value: '21'
-
-switch:
-  - platform: gpio
-    id: compressor_output
-    internal: true
-    pin:
-      number: ${COMPRESSOR_OUTPUT}
-      inverted: yes
-
-  - platform: gpio
-    id: fan_output
-    internal: true
-    pin:
-      number: ${FAN_ENABLE}
-      inverted: yes
-
+# Sync time with Home Assistant.
 time:
   - platform: homeassistant
-    id: time
+    id: homeassistant_time
+
+# Text sensors with general information.
+text_sensor:
+  # Expose WiFi information as sensors.
+  - platform: wifi_info
+    ip_address:
+      name: ${DEVICE_NAME} IP
+    ssid:
+      name: ${DEVICE_NAME} SSID
+
+# Sensors with general information.
+sensor:
+  - platform: uptime
+    name: ${DEVICE_NAME} Uptime
+
+  - platform: htu21d
+    temperature:
+      id: temp
+      name: ${DEVICE_NAME} Temperature
+      filters:
+        - median:
+            window_size: 7
+            send_every: 4
+            send_first_at: 1
+    humidity:
+      id: hum
+      name: ${DEVICE_NAME} Humidity
+      filters:
+        - median:
+            window_size: 7
+            send_every: 4
+            send_first_at: 1
+    update_interval: 10s
 
 binary_sensor:
   - platform: status
-    name: "${DEVICE_ID} Status"
+    name: ${DEVICE_NAME} Status
 
-<<: !include scripts.yaml
+status_led:
+    pin:
+      number: ${STATUS_PIN}
+      inverted: true
 
-<<: !include light.yaml
+switch:
+  - platform: gpio
+    pin:
+      number: ${COMPRESSOR_OUTPUT}
+      inverted: true
+    id: compressor
+  - platform: gpio
+    pin:
+      number: ${FAN_OUTPUT}
+      inverted: true
+    id: fan
+  - platform: restart
+    name: ${DEVICE_NAME} restart
 
-sensor:
-  # HTU21D used to determine ambient temperature. Can be replaced by any other temperature sensor (provided the logic remains the same)
-  # Should be placed in front of the air intake for the AC unit.
-  - platform: htu21d
-    temperature:
-      name: "${DEVICE_ID} Temp"
-      id: temp
-      on_value:
-        - script.execute: on_temp_value
+climate:
+  - platform: thermostat
+    name: ${DEVICE_NAME} Thermostat
+    sensor: temp
+    default_target_temperature_high: ${TARGET_TEMP}
+    id: therm
 
-    humidity:
-      name: "${DEVICE_ID} Humidity"
-      id: hum
-    update_interval: 60s
+    cool_action:
+      - script.execute: on_cool
+    idle_action:
+      - script.execute: on_idle
+    # fan_only_action:
+    #   - script.execute: fan_only_action
+    fan_mode_on_action:
+      - script.execute: fan_on_action
+    fan_mode_auto_action:
+      - script.execute: fan_auto_action
 
-  # BH1750 Lux Sensor - not required for operation
-  - platform: bh1750
-    name: "${DEVICE_ID} Lux"
-    id: lux
-    address: 0x23
-    update_interval: 60s
+script:
+  - id: on_cool
+    then:
+      - logger.log: "on_cool start"
+      - if:
+          condition:
+            - script.is_running: on_idle
+          then:
+            - script.wait: on_idle
+      - if:
+          condition:
+            - switch.is_off: fan
+          then:
+            - logger.log: "Spooling up fan"
+            - switch.turn_on: fan
+            - delay: 15s
+      - logger.log: "Turning on compressor"
+      - switch.turn_on: compressor
+      - delay: 2s
+      - logger.log: "on_cool end"
 
-  # Home assistant input select element that is used to set the operation mode from the web.
-  # Can also be modified by use of the rotary encoder, and will update to reflect the currenly set operation mode
-  - platform: homeassistant
-    id: setTemp
-    entity_id: ${TEMP_INPUT}
-    on_value:
-      - then:
-          - script.execute: on_temp_value
+  - id: on_idle
+    then:
+      - logger.log: "on_idle start"
+      - if:
+          condition:
+            - script.is_running: on_cool
+          then:
+            - logger.log: "waiting for on_cool"
+            - script.wait: on_cool
 
-text_sensor:
+      - if:
+          condition:
+            - switch.is_on: compressor
+          then:
+            - logger.log: "Turning off compressor"
+            - switch.turn_off: compressor
+            - delay: 60s
+            - if:
+                condition:
+                  and:
+                    - lambda: return id(therm).fan_mode == esphome::climate::ClimateFanMode::CLIMATE_FAN_AUTO;
+                    - lambda: return id(therm).action == esphome::climate::ClimateAction::CLIMATE_ACTION_COOLING;
+                then:
+                  - logger.log: "Turning off fan"
+                  - switch.turn_off: fan
 
-  - id: setMode
-    name: "${DEVICE_ID} Mode"
-    platform: homeassistant
-    entity_id: ${MODE_INPUT}
-    internal: true
-    on_value:
-      - then:
-          - script.execute: on_mode_value
+      - if:
+          condition:
+            or:
+              - lambda: return id(therm).fan_mode == esphome::climate::ClimateFanMode::CLIMATE_FAN_AUTO;
+              - lambda: return id(therm).mode != esphome::climate::ClimateMode::CLIMATE_MODE_OFF;
+          then:
+            - logger.log: "Turning off fan"
+            - switch.turn_off: fan
 
-  - id: opStateText
-    platform: template
-    name: "${DEVICE_ID} Operation State"
-    update_interval: 15s
-    lambda: |-
-      if (id(opState) == 0) {
-        return {"Off"};
-      } else if (id(opState) == 1) {
-        return {"Idle"};
-      } else if (id(opState) == 2) {
-        return {"Cool"};
-      } else if (id(opState) == 3) {
-        return {"Fan"};
-      } else {
-        return {"Unknown"};
-      }
+      - logger.log: "on_idle end"
 
-remote_receiver:
-  pin: ${IR_RECEIVER}
-  dump: all
+  - id: fan_on_action
+    then:
+      - logger.log: "fan_on_action start"
+      - if:
+          condition:
+            and:
+              - switch.is_off: fan
+              - lambda: return id(therm).mode == esphome::climate::ClimateMode::CLIMATE_MODE_COOL;
+          then:
+            - switch.turn_on: fan
+      - logger.log: "fan_on_action end"
+
+  - id: fan_only_action
+    then:
+      - logger.log: "fan_only_action start"
+      - switch.turn_on: fan
+      - logger.log: "fan_only_action end"
+
+  - id: fan_auto_action
+    then:
+      - logger.log: "fan_auto_action start"
+      - if:
+          condition:
+            - lambda: return id(therm).action != esphome::climate::ClimateAction::CLIMATE_ACTION_COOLING;
+          then:
+            - script.execute: on_idle
+      - logger.log: "fan_auto_action end"
 
 font:
-- file: 'slkscr.ttf'
-  id: font1
-  size: 8
+  - file: 'slkscr.ttf'
+    id: font1
+    size: 8
 
-- file: 'bebas.ttf'
-  id: font2
-  size: 36
-  glyphs: "0123456789: "
+  - file: 'bebas.ttf'
+    id: font2
+    size: 36
 
-- file: 'arial_narrow_7.ttf'
-  id: font3
-  size: 12
-  glyphs: "0123456789°%."
-
-image:
-  - file: "fan_outline-large.png"
-    id: fanIcon
-  - file: "snowflake-large.png"
-    id: coolIcon
-  - file: "clock-outline.png"
-    id: idleIcon
+  - file: 'arial_narrow_7.ttf'
+    id: font3
+    size: 12
 
 display:
   - platform: ssd1306_i2c
     model: "SH1106 128x64"
-    reset_pin: ${RESET}
     address: 0x3C
     id: oled
     lambda: |-
+      it.printf(64, 0, id(font1), TextAlign::TOP_CENTER, "${DEVICE_NAME}");
 
-      it.printf(64, 0, id(font1), TextAlign::TOP_CENTER, "Air Conditioner");
+      it.printf(64, 0, id(font2), TextAlign::TOP_CENTER, "%.1f", id(temp).state);
 
-      // Print time in HH:MM format
-      it.strftime(42, 0, id(font2), TextAlign::TOP_CENTER, "%H:%M", id(time).now());
-
-      // Print temperature
-      if (id(temp).has_state()) {
-        it.printf(3, 52, id(font3), TextAlign::TOP_LEFT , "%.1f°", id(temp).state);
-      }
+      // Print target temperature
+      it.printf(3, 52, id(font3), TextAlign::TOP_LEFT , "%.1f°", id(therm).target_temperature);
 
       // Print humidity
       if (id(hum).has_state()) {
         it.printf(42, 52, id(font3), TextAlign::TOP_CENTER , "%.0f%%", id(hum).state);
       }
 
-      // Print lux
-      if (id(lux).has_state()) {
-        it.printf(80, 52, id(font3), TextAlign::TOP_RIGHT , "%.0f", id(lux).state);
-      }
-
-      // Print mode
-      if (id(setMode).has_state()) {
-        it.printf(102, 54, id(font1), TextAlign::TOP_CENTER , "%s", id(opStateText).state.c_str());
-      }
-
-      // Display state icon
-      if (id(opState) == 1) {
-        it.image(86, 12, id(idleIcon));
-      } else if (id(opState) == 2) {
-        it.image(86, 12, id(coolIcon));
-      } else if (id(opState) == 3) {
-        it.image(86, 12, id(fanIcon));
-      }
+      // Print time in HH:MM format
+      it.strftime(120, 52, id(font3), TextAlign::TOP_RIGHT, "%H:%M", id(homeassistant_time).now());
